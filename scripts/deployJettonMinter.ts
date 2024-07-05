@@ -53,5 +53,6 @@ export async function run(provider: NetworkProvider) {
                                                   }, 
                                                   await compile('JettonMinter'));
 
+                                                  console.log(minter.address);
     await provider.deploy(minter, toNano('0.05'));
 }

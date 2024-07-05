@@ -1,10 +1,10 @@
 import { Address, beginCell, Cell, fromNano, OpenedContract, toNano } from '@ton/core';
 import { compile, sleep, NetworkProvider, UIProvider} from '@ton/blueprint';
 import { JettonMinter } from '../wrappers/JettonMinter';
-import { promptBool, promptAmount, promptAddress, displayContentCell, waitForTransaction } from '../wrappers/ui-utils';
+import { promptBool, promptAmount, promptAddress, displayContentCell, waitForTransaction, getAccountLastTx } from '../wrappers/ui-utils';
 let minterContract:OpenedContract<JettonMinter>;
 
-const adminActions  = ['Mint', 'Change admin'];
+const adminActions  = ['Mint', 'Burn', 'Change admin'];
 const userActions   = ['Info', 'Quit'];
 
 
@@ -42,14 +42,18 @@ const changeAdminAction = async(provider:NetworkProvider, ui:UIProvider) => {
         }
     } while(retry);
 
-    const curState = await provider.api().getContractState(minterContract.address);
-    if(curState.lastTransaction === null)
+    // const curState = await provider.api().getContractState(minterContract.address);
+    // if(curState.lastTransaction === null)
+    //     throw("Last transaction can't be null on deployed contract");
+    const curState = await getAccountLastTx(provider, minterContract.address);
+    if(curState === null)
         throw("Last transaction can't be null on deployed contract");
 
     await minterContract.sendChangeAdmin(provider.sender(), newAdmin);
     const transDone = await waitForTransaction(provider,
                                                minterContract.address,
-                                               curState.lastTransaction.lt,
+                                            //    curState.lastTransaction.lt,
+                                            curState,
                                                10);
     if(transDone) {
         const adminAfter = await minterContract.getAdminAddress();
@@ -83,10 +87,14 @@ const mintAction = async (provider:NetworkProvider, ui:UIProvider) => {
     ui.write(`Minting ${mintAmount} to ${mintAddress}\n`);
     const supplyBefore = await minterContract.getTotalSupply();
     const nanoMint     = toNano(mintAmount);
-    const curState     = await provider.api().getContractState(minterContract.address);
+    // const curState     = await provider.api().getContractState(minterContract.address);
 
-    if(curState.lastTransaction === null)
+    // if(curState.lastTransaction === null)
+        // throw("Last transaction can't be null on deployed contract");
+    const curState = await getAccountLastTx(provider, minterContract.address);
+    if(curState === null)
         throw("Last transaction can't be null on deployed contract");
+
 
     const res = await minterContract.sendMint(sender,
                                               mintAddress,
@@ -95,7 +103,7 @@ const mintAction = async (provider:NetworkProvider, ui:UIProvider) => {
                                               toNano('0.1'));
     const gotTrans = await waitForTransaction(provider,
                                               minterContract.address,
-                                              curState.lastTransaction.lt,
+                                              curState,
                                               10);
     if(gotTrans) {
         const supplyAfter = await minterContract.getTotalSupply();
@@ -105,6 +113,58 @@ const mintAction = async (provider:NetworkProvider, ui:UIProvider) => {
         }
         else {
             ui.write("Mint failed!");
+        }
+    }
+    else {
+        failedTransMessage(ui);
+    }
+}
+
+const burnAction = async (provider:NetworkProvider, ui:UIProvider) => {
+    const sender = provider.sender();
+    let retry:boolean;
+    let burnAddress:Address;
+    let burnAmount:string;
+    let forwardAmount:string;
+
+    do {
+        retry = false;
+        const fallbackAddr = sender.address ?? await minterContract.getAdminAddress();
+        burnAddress = await promptAddress(`Please specify address to burn to`, ui, fallbackAddr);
+        burnAmount  = await promptAmount('Please provide burn amount in decimal form:', ui);
+        ui.write(`Burn ${burnAmount} tokens to ${burnAddress}\n`);
+        retry = !(await promptBool('Is it ok?(yes/no)', ['yes', 'no'], ui));
+    } while(retry);
+
+    ui.write(`Burning ${burnAmount} to ${burnAddress}\n`);
+    const supplyBefore = await minterContract.getTotalSupply();
+    const nanoBurn     = toNano(burnAmount);
+    // const curState     = await provider.api().getContractState(minterContract.address);
+
+    // if(curState.lastTransaction === null)
+        // throw("Last transaction can't be null on deployed contract");
+    const curState = await getAccountLastTx(provider, minterContract.address);
+    if(curState === null)
+        throw("Last transaction can't be null on deployed contract");
+
+
+    const res = await minterContract.sendBurn(sender,
+                                              burnAddress,
+                                              nanoBurn,
+                                              toNano('0.05'),
+                                              toNano('0.1'));
+    const gotTrans = await waitForTransaction(provider,
+                                              minterContract.address,
+                                              curState,
+                                              10);
+    if(gotTrans) {
+        const supplyAfter = await minterContract.getTotalSupply();
+
+        if(supplyAfter == supplyBefore - nanoBurn) {
+            ui.write("Burn successfull!\nCurrent supply:" + fromNano(supplyAfter));
+        }
+        else {
+            ui.write("Burn failed!");
         }
     }
     else {
@@ -125,19 +185,22 @@ export async function run(provider: NetworkProvider) {
     do {
         retry = false;
         minterAddress = await promptAddress('Please enter minter address:', ui);
-        const contractState = await api.getContractState(minterAddress);
-        if(contractState.state !== "active" || contractState.code == null) {
+        console.log("MINTER address", minterAddress);
+        // const contractState = await api.getContractState(minterAddress);
+        const curState = await getAccountLastTx(provider, minterAddress);
+
+        if(curState == null) {
             retry = true;
             ui.write("This contract is not active!\nPlease use another address, or deploy it firs");
         }
-        else {
-            const stateCode = Cell.fromBoc(contractState.code)[0];
-            if(!stateCode.equals(minterCode)) {
-                ui.write("Contract code differs from the current contract version!\n");
-                const resp = await ui.choose("Use address anyway", ["Yes", "No"], (c) => c);
-                retry = resp == "No";
-            }
-        }
+        // else {
+        //     const stateCode = provider.api().get;
+        //     if(!stateCode.equals(minterCode)) {
+        //         ui.write("Contract code differs from the current contract version!\n");
+        //         const resp = await ui.choose("Use address anyway", ["Yes", "No"], (c) => c);
+        //         retry = resp == "No";
+        //     }
+        // }
     } while(retry);
 
     minterContract = provider.open(JettonMinter.createFromAddress(minterAddress));
@@ -157,6 +220,9 @@ export async function run(provider: NetworkProvider) {
         switch(action) {
             case 'Mint':
                 await mintAction(provider, ui);
+                break;
+            case 'Burn':
+                await burnAction(provider, ui);
                 break;
             case 'Change admin':
                 await changeAdminAction(provider, ui);

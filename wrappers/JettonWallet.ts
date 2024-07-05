@@ -1,9 +1,14 @@
 import { Address, beginCell, Cell, Contract, contractAddress, ContractProvider, Sender, SendMode, toNano } from '@ton/core';
 
-export type JettonWalletConfig = {};
+export type JettonWalletConfig = {owner: Address, master_address: Address; wallet_code: Cell};
 
 export function jettonWalletConfigToCell(config: JettonWalletConfig): Cell {
-    return beginCell().endCell();
+    return beginCell()
+                      .storeCoins(100)
+                      .storeAddress(config.owner)
+                      .storeAddress(config.master_address)
+                      .storeRef(config.wallet_code)
+           .endCell();
 }
 
 export class JettonWallet implements Contract {
